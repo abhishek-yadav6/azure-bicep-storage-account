@@ -1,1 +1,0 @@
-# azure-bicep-storage-account
