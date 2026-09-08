@@ -1,0 +1,8 @@
+#cloud-config
+package_update: true
+packages:
+  - nginx
+runcmd:
+  - bash -c 'echo "<html><head><title>Two-Tier App - __WEB_INDEX__</title></head><body><h1>Hello from __WEB_INDEX__</h1><p>Hostname: $(hostname)</p></body></html>" > /var/www/html/index.html'
+  - systemctl enable nginx
+  - systemctl restart nginx
