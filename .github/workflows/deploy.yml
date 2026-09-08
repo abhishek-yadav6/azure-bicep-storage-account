@@ -1,0 +1,56 @@
+name: Deploy Two-Tier App to Azure
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'main.bicep'
+      - 'modules/**'
+      - 'cloud-init/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Ensure resource group exists
+        run: |
+          az group create \
+            --name "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --location "${{ secrets.AZURE_LOCATION }}"
+
+      - name: Deploy Bicep template
+        run: |
+          az deployment group create \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --template-file main.bicep \
+            --parameters \
+              storageAccountName="${{ secrets.STORAGE_ACCOUNT_NAME }}" \
+              location="${{ secrets.AZURE_LOCATION }}" \
+              adminUsername="${{ secrets.ADMIN_USERNAME }}" \
+              adminPassword="${{ secrets.ADMIN_PASSWORD }}" \
+              dbName="${{ secrets.DB_NAME }}" \
+              dbUsername="${{ secrets.DB_USERNAME }}" \
+              dbPassword="${{ secrets.DB_PASSWORD }}"
+
+      - name: Show deployment outputs
+        run: |
+          az deployment group show \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --name main \
+            --query properties.outputs
