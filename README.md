@@ -77,6 +77,72 @@ az deployment group create \
 
 After deployment, the outputs include the load balancer's public IP — browse to `http://<publicIp>` to hit the web tier (refresh a few times to see the load balancer alternate between `web-vm-1` and `web-vm-2`), and use the printed `sshWebVm1`/`sshWebVm2` commands to SSH into each web server (port 50001/50002 on the same public IP).
 
+## CI/CD (GitHub Actions)
+
+Two workflows live under `.github/workflows/`:
+
+- **`validate.yml`** — runs on every pull request that touches a `.bicep` file. Just runs `az bicep build` on `main.bicep` and every module to catch syntax errors. Needs no Azure credentials.
+- **`deploy.yml`** — runs whenever `main.bicep`, `modules/**`, or `cloud-init/**` change on `main` (i.e. right after a PR merges), plus a manual `workflow_dispatch` trigger. It logs into Azure via OIDC and runs the same `az deployment group create` shown above. **This is what actually creates/updates the infrastructure in Azure.**
+
+Nothing deploys until you complete this one-time setup yourself (it needs your own `az login`, so it can't be done from here):
+
+```bash
+# Run these locally, logged into the target Azure subscription
+APP_NAME="gh-actions-two-tier-app"
+RESOURCE_GROUP="rg-two-tier-app"
+LOCATION="eastus"
+GITHUB_ORG="abhishek-yadav6"
+GITHUB_REPO="azure-bicep-storage-account"
+SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+TENANT_ID=$(az account show --query tenantId -o tsv)
+
+# 1. Resource group the app will deploy into
+az group create --name "$RESOURCE_GROUP" --location "$LOCATION"
+
+# 2. App registration + service principal for GitHub Actions to log in as
+az ad app create --display-name "$APP_NAME"
+APP_ID=$(az ad app list --display-name "$APP_NAME" --query "[0].appId" -o tsv)
+az ad sp create --id "$APP_ID"
+
+# 3. Let it manage resources in that resource group only
+az role assignment create \
+  --assignee "$APP_ID" \
+  --role "Contributor" \
+  --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP"
+
+# 4. Trust GitHub Actions running on this repo's main branch — no client secret needed
+az ad app federated-credential create \
+  --id "$APP_ID" \
+  --parameters '{
+    "name": "github-main-branch",
+    "issuer": "https://token.actions.githubusercontent.com",
+    "subject": "repo:'"$GITHUB_ORG"'/'"$GITHUB_REPO"':ref:refs/heads/main",
+    "audiences": ["api://AzureADTokenExchange"]
+  }'
+
+echo "AZURE_CLIENT_ID=$APP_ID"
+echo "AZURE_TENANT_ID=$TENANT_ID"
+echo "AZURE_SUBSCRIPTION_ID=$SUBSCRIPTION_ID"
+```
+
+Then, in the GitHub repo (**Settings → Secrets and variables → Actions → New repository secret**), add:
+
+| Secret | Value |
+|---|---|
+| `AZURE_CLIENT_ID` | printed above |
+| `AZURE_TENANT_ID` | printed above |
+| `AZURE_SUBSCRIPTION_ID` | printed above |
+| `AZURE_RESOURCE_GROUP` | `rg-two-tier-app` (or whatever you used) |
+| `AZURE_LOCATION` | `eastus` (or whatever you used) |
+| `STORAGE_ACCOUNT_NAME` | a globally-unique, lowercase, 3-24 char name |
+| `ADMIN_USERNAME` | e.g. `azureadmin` |
+| `ADMIN_PASSWORD` | meets Azure's complexity rules |
+| `DB_NAME` | e.g. `appdb` |
+| `DB_USERNAME` | e.g. `appuser` |
+| `DB_PASSWORD` | meets Azure's complexity rules |
+
+Once those secrets exist, merging a PR into `main` (or manually running the `deploy.yml` workflow from the Actions tab) triggers the actual Azure deployment. Optionally create a `production` GitHub Environment with required reviewers so a merge pauses for manual approval before it spends money.
+
 ## Notes / things to adjust before production use
 
 - `adminPassword`/`dbPassword` use password auth for simplicity. For production, switch to SSH public-key auth on the VMs and consider Azure Database for MySQL (PaaS) instead of a self-managed VM.
